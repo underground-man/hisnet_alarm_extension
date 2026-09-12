@@ -1,0 +1,1 @@
+console.log("[HISNet ext] service worker loaded");

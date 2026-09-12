@@ -1,0 +1,9 @@
+{
+    "manifest_version": 3,
+    "version": "0.1.0",
+    "name": "HISNet 공지 알림봇",
+    "host_permissions": ["https://hisnet.handong.edu/*"],
+    "background": {
+        "service_worker": "background.js"
+    }
+}
