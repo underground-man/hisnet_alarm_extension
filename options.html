@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>HISNet 알림 설정</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 480px;
+      margin: 24px auto;
+      color: #222;
+    }
+    h1 {
+      font-size: 18px;
+    }
+    section {
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #ddd;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+    }
+    input[type="text"],
+    input[type="password"],
+    input[type="number"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px;
+      margin-top: 4px;
+    }
+    #boardList {
+      list-style: none;
+      padding: 0;
+    }
+    #boardList li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px solid #eee;
+      font-size: 13px;
+    }
+    .board-add-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .board-add-row input {
+      flex: 1;
+    }
+    button {
+      cursor: pointer;
+    }
+    #saveBtn {
+      padding: 8px 16px;
+    }
+    #statusMsg {
+      color: green;
+    }
+  </style>
+</head>
+<body>
+  <h1>HISNet 알림 설정</h1>
+
+  <section>
+    <h2>계정</h2>
+    <label>아이디
+      <input type="text" id="loginId" autocomplete="off" />
+    </label>
+    <label>비밀번호
+      <input type="password" id="loginPassword" autocomplete="off" />
+    </label>
+    <p style="font-size: 12px; color: #666;">
+      이 확장 프로그램 전용 기기(내 컴퓨터)에만 저장되며, 다른 곳으로 전송되지 않습니다.
+    </p>
+  </section>
+
+  <section>
+    <h2>확인 주기 (분)</h2>
+    <input type="number" id="intervalMinutes" min="15" step="1" />
+    <p style="font-size: 12px; color: #666;">최소 15분입니다 (학교 서버 부담 방지).</p>
+  </section>
+
+  <section>
+    <h2>게시판 목록</h2>
+    <ul id="boardList"></ul>
+    <div class="board-add-row">
+      <input type="text" id="newBoardName" placeholder="게시판 이름" />
+      <input type="text" id="newBoardUrl" placeholder="게시판 URL" />
+      <button id="addBoardBtn">추가</button>
+    </div>
+  </section>
+
+  <button id="saveBtn">저장</button>
+  <p id="statusMsg"></p>
+
+  <script src="options.js"></script>
+</body>
+</html>
