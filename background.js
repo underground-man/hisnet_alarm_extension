@@ -58,6 +58,25 @@ async function loginToHisnet(id, password){
 
 }
 
+// 흔한 HTML 엔티티(named) + 숫자 문자 참조(&#129386; 같은 이모지 포함)를 디코딩한다.
+// 서비스 워커에는 DOM이 없어서(document.createElement 같은 트릭 불가) 직접 구현한다.
+function decodeHtmlEntities(text) {
+  const namedEntities = {
+    "&nbsp;": " ",
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&apos;": "'",
+  };
+
+  return text
+    .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;|&apos;/g, (m) => namedEntities[m])
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
+}
+
 function parseBoardPosts(html) {
   const rowPattern = /<tr class="tr_basic">[\s\S]*?<\/tr>/g;
   const rows = html.match(rowPattern) || [];
@@ -68,7 +87,7 @@ function parseBoardPosts(html) {
 
     const id = Number(matches[0][1]);
     const rawTitle = matches[1][2];
-    const title = rawTitle.replace(/&nbsp;/g, " ").trim();
+    const title = decodeHtmlEntities(rawTitle).trim();
 
     return { id, title };
   });
@@ -124,10 +143,7 @@ async function compareAndGetNewPosts(boardUrl, posts) {
 
 // ===== Stage 4: 알림 생성 + 클릭 시 이동 =====
 
-// 1x1 투명 PNG. 실제 아이콘 파일 없이도 chrome.notifications의 iconUrl 요구사항을
-// 만족시키기 위한 자리표시자 - 나중에 실제 아이콘으로 교체 가능.
-const PLACEHOLDER_ICON =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const NOTIFICATION_ICON = "icons/icon128.png";
 
 function buildReadUrl(boardUrl, postId) {
   const board = new URL(boardUrl).searchParams.get("Board");
@@ -167,7 +183,7 @@ async function notifyNewPosts(boardName, boardUrl, newPosts) {
 
   chrome.notifications.create(notificationId, {
     type: "basic",
-    iconUrl: PLACEHOLDER_ICON,
+    iconUrl: NOTIFICATION_ICON,
     title: boardName,
     message,
   });
@@ -176,7 +192,7 @@ async function notifyNewPosts(boardName, boardUrl, newPosts) {
 function notifyLoginFailure(message) {
   chrome.notifications.create(`hisnet-login-fail-${Date.now()}`, {
     type: "basic",
-    iconUrl: PLACEHOLDER_ICON,
+    iconUrl: NOTIFICATION_ICON,
     title: "HISNet 로그인 실패",
     message,
   });
@@ -247,40 +263,151 @@ async function fetchBoardPostsWithRetry(board, credentials) {
   return posts;
 }
 
-// ===== 전체 흐름을 묶는 실행 함수 =====
+// ===== 안 읽은 새 글 개수 배지 =====
+// 알림을 놓쳐도 툴바 아이콘에 숫자가 남아있게 하고, 팝업을 열면(=확인함) 지운다.
 
-async function runCheck() {
-  const { credentials, boards } = await getSettings();
+// unreadPosts: [{ boardName, title, url }, ...] - 팝업에서 목록으로 보여줄 항목 그대로 저장.
+// 배지 숫자는 이 배열의 길이다.
+async function getUnreadPosts() {
+  const data = await chrome.storage.local.get("unreadPosts");
+  return data.unreadPosts || [];
+}
 
-  if (!credentials || !credentials.id || !credentials.password) {
-    console.warn("[HISNet ext] 계정 정보가 설정되지 않았습니다. 옵션 페이지에서 입력해주세요.");
-    return;
-  }
-
-  let loginResult;
-  try {
-    loginResult = await withRetry(() => loginToHisnet(credentials.id, credentials.password), 1);
-  } catch (err) {
-    console.error("[HISNet ext] 로그인 요청 자체가 실패함 (네트워크 오류 등):", err);
-    return;
-  }
-
-  if (!loginResult.success) {
-    console.error("[HISNet ext] 로그인 실패:", loginResult.message);
-    notifyLoginFailure(loginResult.message);
-    return;
-  }
-
-  for (const board of boards) {
-    try {
-      const posts = await withRetry(() => fetchBoardPostsWithRetry(board, credentials), 1);
-      const newPosts = await compareAndGetNewPosts(board.url, posts);
-      await notifyNewPosts(board.name, board.url, newPosts);
-    } catch (err) {
-      console.error(`[HISNet ext] ${board.name} 확인 중 오류:`, err);
-    }
+async function updateBadge(count) {
+  if (count > 0) {
+    chrome.action.setBadgeText({ text: String(count) });
+    chrome.action.setBadgeBackgroundColor({ color: "#e53935" });
+  } else {
+    chrome.action.setBadgeText({ text: "" });
   }
 }
+
+async function addUnreadPosts(entries) {
+  const next = (await getUnreadPosts()).concat(entries);
+  await chrome.storage.local.set({ unreadPosts: next });
+  await updateBadge(next.length);
+}
+
+async function clearUnreadPosts() {
+  await chrome.storage.local.set({ unreadPosts: [] });
+  await updateBadge(0);
+}
+
+// 서비스 워커가 (재시작 등으로) 새로 뜰 때마다 저장된 값 기준으로 배지를 다시 그린다.
+getUnreadPosts().then((posts) => updateBadge(posts.length));
+
+// ===== 전체 흐름을 묶는 실행 함수 =====
+
+// 알람이 겹치거나("지금 확인" 버튼을 연타하는 등) runCheck이 중복 실행되는 걸 막는다.
+// 이 값은 서비스 워커가 살아있는 동안만 유효하지만, 겹쳐 실행되는 상황은 애초에
+// "같은 워커 인스턴스가 살아있는 동안 두 번째 트리거가 들어오는" 경우뿐이라 충분하다.
+let isRunning = false;
+
+async function recordCheckStatus(success, message) {
+  await chrome.storage.local.set({
+    lastCheckStatus: { time: Date.now(), success, message },
+  });
+}
+
+async function runCheck() {
+  if (isRunning) {
+    console.warn("[HISNet ext] 이미 확인이 진행 중이라 이번 실행은 건너뜁니다.");
+    return;
+  }
+  isRunning = true;
+
+  try {
+    const { credentials, boards } = await getSettings();
+
+    if (!credentials || !credentials.id || !credentials.password) {
+      const msg = "계정 정보가 설정되지 않았습니다. 옵션 페이지에서 입력해주세요.";
+      console.warn(`[HISNet ext] ${msg}`);
+      await recordCheckStatus(false, msg);
+      return;
+    }
+
+    let loginResult;
+    try {
+      loginResult = await withRetry(() => loginToHisnet(credentials.id, credentials.password), 1);
+    } catch (err) {
+      const msg = `로그인 요청 자체가 실패함 (네트워크 오류 등): ${err.message}`;
+      console.error(`[HISNet ext] ${msg}`);
+      await recordCheckStatus(false, msg);
+      return;
+    }
+
+    if (!loginResult.success) {
+      console.error("[HISNet ext] 로그인 실패:", loginResult.message);
+      notifyLoginFailure(loginResult.message);
+      await recordCheckStatus(false, `로그인 실패: ${loginResult.message}`);
+      return;
+    }
+
+    let totalNew = 0;
+    const boardErrors = [];
+    const collectedNewPosts = [];
+
+    for (const board of boards) {
+      try {
+        const posts = await withRetry(() => fetchBoardPostsWithRetry(board, credentials), 1);
+        const newPosts = await compareAndGetNewPosts(board.url, posts);
+        await notifyNewPosts(board.name, board.url, newPosts);
+        totalNew += newPosts.length;
+
+        for (const post of newPosts) {
+          collectedNewPosts.push({
+            boardName: board.name,
+            title: post.title,
+            url: buildReadUrl(board.url, post.id),
+          });
+        }
+      } catch (err) {
+        console.error(`[HISNet ext] ${board.name} 확인 중 오류:`, err);
+        boardErrors.push(`${board.name}: ${err.message}`);
+      }
+    }
+
+    const summary =
+      boardErrors.length === 0
+        ? `${boards.length}개 게시판 확인 완료 (새 글 ${totalNew}건)`
+        : `일부 게시판 확인 실패: ${boardErrors.join(", ")}`;
+
+    if (collectedNewPosts.length > 0) {
+      await addUnreadPosts(collectedNewPosts);
+    }
+
+    await recordCheckStatus(boardErrors.length === 0, summary);
+  } finally {
+    isRunning = false;
+  }
+}
+
+// ===== 팝업/옵션 페이지와의 통신 =====
+// popup.js, options.js는 background.js의 함수를 직접 호출할 수 없는 별개의 실행
+// 컨텍스트라, chrome.runtime.sendMessage로 요청을 보내고 여기서 처리한다.
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "RUN_CHECK_NOW") {
+    runCheck().then(() => sendResponse({ ok: true }));
+    return true; // 비동기로 sendResponse를 호출하겠다는 표시 (필수)
+  }
+
+  if (message?.type === "TEST_LOGIN") {
+    loginToHisnet(message.id, message.password)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, message: err.message }));
+    return true;
+  }
+
+  if (message?.type === "CONSUME_UNREAD_POSTS") {
+    // 팝업이 목록을 읽어가는 것 = "확인함"으로 간주하고 한 번에 반환+비우기를 한다
+    // (따로 읽기/지우기를 하면 그 사이에 새 확인이 끼어드는 경쟁 상태가 생길 수 있다).
+    getUnreadPosts().then((posts) => {
+      clearUnreadPosts().then(() => sendResponse({ posts }));
+    });
+    return true;
+  }
+});
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
@@ -311,8 +438,14 @@ chrome.runtime.onInstalled.addListener(async () => {
     await chrome.storage.local.set({ checkIntervalMinutes: 60 });
   }
 
-  setupAlarm();
+  await setupAlarm();
+  runCheck();
 });
 
-chrome.runtime.onStartup.addListener(setupAlarm);
+// 컴퓨터/브라우저를 껐다 켰을 때 "다음 주기까지 최대 60분 대기"가 아니라, 꺼져있는
+// 동안 쌓였을 수도 있는 새 글을 바로 확인하도록 즉시 한 번 실행한다.
+chrome.runtime.onStartup.addListener(async () => {
+  await setupAlarm();
+  runCheck();
+});
 

@@ -6,8 +6,27 @@ const DEFAULT_BOARDS = [
 
 let currentBoards = [];
 
+function renderStatus(lastCheckStatus) {
+  const box = document.getElementById("statusBox");
+
+  if (!lastCheckStatus) {
+    box.textContent = "아직 확인 기록이 없습니다.";
+    box.style.color = "#888";
+    return;
+  }
+
+  const time = new Date(lastCheckStatus.time).toLocaleString("ko-KR");
+  box.textContent = `${lastCheckStatus.success ? "✅ 정상" : "❌ 오류"} · ${time}`;
+  box.style.color = lastCheckStatus.success ? "#1a7a1a" : "#b00020";
+}
+
 async function loadSettings() {
-  const data = await chrome.storage.local.get(["credentials", "boards", "checkIntervalMinutes"]);
+  const data = await chrome.storage.local.get([
+    "credentials",
+    "boards",
+    "checkIntervalMinutes",
+    "lastCheckStatus",
+  ]);
 
   document.getElementById("loginId").value = data.credentials?.id || "";
   document.getElementById("loginPassword").value = data.credentials?.password || "";
@@ -15,6 +34,27 @@ async function loadSettings() {
 
   currentBoards = data.boards || DEFAULT_BOARDS;
   renderBoardList();
+  renderStatus(data.lastCheckStatus);
+}
+
+async function testLogin() {
+  const id = document.getElementById("loginId").value.trim();
+  const password = document.getElementById("loginPassword").value;
+  const resultEl = document.getElementById("testLoginResult");
+
+  if (!id || !password) {
+    resultEl.textContent = "아이디와 비밀번호를 먼저 입력해주세요.";
+    resultEl.style.color = "#b00020";
+    return;
+  }
+
+  resultEl.textContent = "테스트 중...";
+  resultEl.style.color = "#666";
+
+  const result = await chrome.runtime.sendMessage({ type: "TEST_LOGIN", id, password });
+
+  resultEl.textContent = result.success ? "✅ 로그인 성공" : `❌ ${result.message}`;
+  resultEl.style.color = result.success ? "#1a7a1a" : "#b00020";
 }
 
 function renderBoardList() {
@@ -24,17 +64,31 @@ function renderBoardList() {
   currentBoards.forEach((board, index) => {
     const li = document.createElement("li");
 
-    const label = document.createElement("span");
-    label.textContent = `${board.name} (${board.url})`;
+    const info = document.createElement("div");
+    info.className = "board-info";
+
+    const name = document.createElement("span");
+    name.className = "board-name";
+    name.textContent = board.name;
+
+    const url = document.createElement("span");
+    url.className = "board-url";
+    url.textContent = board.url;
+
+    info.appendChild(name);
+    info.appendChild(url);
 
     const deleteBtn = document.createElement("button");
-    deleteBtn.textContent = "삭제";
+    deleteBtn.className = "icon-btn";
+    deleteBtn.textContent = "✕";
+    deleteBtn.setAttribute("aria-label", `${board.name} 삭제`);
+    deleteBtn.title = "삭제";
     deleteBtn.addEventListener("click", () => {
       currentBoards.splice(index, 1);
       renderBoardList();
     });
 
-    li.appendChild(label);
+    li.appendChild(info);
     li.appendChild(deleteBtn);
     list.appendChild(li);
   });
@@ -83,5 +137,6 @@ async function saveSettings() {
 
 document.getElementById("addBoardBtn").addEventListener("click", addBoard);
 document.getElementById("saveBtn").addEventListener("click", saveSettings);
+document.getElementById("testLoginBtn").addEventListener("click", testLogin);
 
 loadSettings();
