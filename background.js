@@ -1,3 +1,18 @@
+importScripts("core.js");
+
+const {
+  BOARD_PRESETS,
+  clearReadNotices,
+  countUnread,
+  deleteNotice,
+  markNoticeRead,
+  mergeNotices,
+  normalizeBoard,
+  normalizeNotice,
+  parseBoardPosts,
+  toggleNoticeFavorite,
+} = HisnetCore;
+
 console.log("[HISNet ext] service worker loaded"); // 콘솔창에서 정상적으로 log 가 뜨는지 확인
 
 async function decodeEucKr(response){ //utf-8 한글 깨짐 방지
@@ -7,6 +22,9 @@ async function decodeEucKr(response){ //utf-8 한글 깨짐 방지
 
 async function fetchLoginFieldNames(){ // 로그인 필드 명 확인 
     const res = await fetch ("https://hisnet.handong.edu/login/login.php");
+    if (!res.ok) {
+        throw new Error(`로그인 페이지 요청 실패 (HTTP ${res.status})`);
+    }
     const html = await decodeEucKr(res);
 
     const idMatch = html.match(/name="(id_\d+)"/);
@@ -43,6 +61,10 @@ async function loginToHisnet(id, password){
         credentials: "include",
     });
 
+    if (!res.ok) {
+        throw new Error(`로그인 요청 실패 (HTTP ${res.status})`);
+    }
+
     const html = await decodeEucKr(res);
 
     if (html.includes("document.location.href")){
@@ -58,44 +80,17 @@ async function loginToHisnet(id, password){
 
 }
 
-// 흔한 HTML 엔티티(named) + 숫자 문자 참조(&#129386; 같은 이모지 포함)를 디코딩한다.
-// 서비스 워커에는 DOM이 없어서(document.createElement 같은 트릭 불가) 직접 구현한다.
-function decodeHtmlEntities(text) {
-  const namedEntities = {
-    "&nbsp;": " ",
-    "&amp;": "&",
-    "&lt;": "<",
-    "&gt;": ">",
-    "&quot;": '"',
-    "&#39;": "'",
-    "&apos;": "'",
-  };
-
-  return text
-    .replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;|&apos;/g, (m) => namedEntities[m])
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)));
-}
-
-function parseBoardPosts(html) {
-  const rowPattern = /<tr class="tr_basic">[\s\S]*?<\/tr>/g;
-  const rows = html.match(rowPattern) || [];
-
-  return rows.map((row) => {
-    const linkPattern = /read\.php\?id=(\d+)[^"]*">([^<]*)</g;
-    const matches = [...row.matchAll(linkPattern)];
-
-    const id = Number(matches[0][1]);
-    const rawTitle = matches[1][2];
-    const title = decodeHtmlEntities(rawTitle).trim();
-
-    return { id, title };
-  });
-}
-
 async function fetchBoardPosts(boardUrl) {
   const res = await fetch(boardUrl, { credentials: "include" });
+  if (!res.ok) {
+    throw new Error(`게시판 요청 실패 (HTTP ${res.status})`);
+  }
   const html = await decodeEucKr(res);
+  if (/name=["']id_\d+["']/i.test(html) && /name=["']password_\d+["']/i.test(html)) {
+    const error = new Error("게시판 대신 로그인 페이지가 반환되었습니다.");
+    error.code = "HISNET_SESSION_EXPIRED";
+    throw error;
+  }
   return parseBoardPosts(html);
 }
 
@@ -144,29 +139,40 @@ async function compareAndGetNewPosts(boardUrl, posts) {
 // ===== Stage 4: 알림 생성 + 클릭 시 이동 =====
 
 const NOTIFICATION_ICON = "icons/icon128.png";
+let notificationOperationQueue = Promise.resolve();
+
+function queueNotificationOperation(operation) {
+  const result = notificationOperationQueue.then(operation, operation);
+  notificationOperationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 function buildReadUrl(boardUrl, postId) {
   const board = new URL(boardUrl).searchParams.get("Board");
   return `https://hisnet.handong.edu/myboard/read.php?id=${postId}&Page=1&Board=${board}`;
 }
 
-async function storeNotificationUrl(notificationId, url) {
-  const data = await chrome.storage.local.get("notificationUrls");
-  const notificationUrls = data.notificationUrls || {};
-  notificationUrls[notificationId] = url;
-  await chrome.storage.local.set({ notificationUrls });
+function storeNotificationUrl(notificationId, url) {
+  return queueNotificationOperation(async () => {
+    const data = await chrome.storage.local.get("notificationUrls");
+    const notificationUrls = data.notificationUrls || {};
+    notificationUrls[notificationId] = url;
+    await chrome.storage.local.set({ notificationUrls });
+  });
 }
 
 // 서비스 워커는 알림이 화면에 떠있는 동안에도 유휴 상태로 꺼졌다가 다시 켜질 수
 // 있다. 그래서 notificationId -> URL 매핑을 메모리 변수가 아니라 chrome.storage에
 // 저장해야, 워커가 재시작된 뒤 알림을 클릭해도 어디로 이동할지 잃어버리지 않는다.
-async function popNotificationUrl(notificationId) {
-  const data = await chrome.storage.local.get("notificationUrls");
-  const notificationUrls = data.notificationUrls || {};
-  const url = notificationUrls[notificationId];
-  delete notificationUrls[notificationId];
-  await chrome.storage.local.set({ notificationUrls });
-  return url;
+function popNotificationUrl(notificationId) {
+  return queueNotificationOperation(async () => {
+    const data = await chrome.storage.local.get("notificationUrls");
+    const notificationUrls = data.notificationUrls || {};
+    const url = notificationUrls[notificationId];
+    delete notificationUrls[notificationId];
+    await chrome.storage.local.set({ notificationUrls });
+    return url;
+  });
 }
 
 async function notifyNewPosts(boardName, boardUrl, newPosts) {
@@ -206,16 +212,53 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
   chrome.notifications.clear(notificationId);
 });
 
+chrome.notifications.onClosed.addListener(async (notificationId) => {
+  await popNotificationUrl(notificationId);
+});
+
 // ===== Stage 5: chrome.alarms 주기 실행 =====
 
 const ALARM_NAME = "hisnet-check";
 const MIN_INTERVAL_MINUTES = 15;
 
 async function getSettings() {
-  const data = await chrome.storage.local.get(["credentials", "boards", "checkIntervalMinutes"]);
+  const data = await chrome.storage.local.get([
+    "credentials",
+    "boards",
+    "checkIntervalMinutes",
+    "lastSeenId",
+  ]);
+  const storedBoards = data.boards || [];
+  const boardMigrations = storedBoards.map((stored) => ({
+    stored,
+    normalized: normalizeBoard(stored, BOARD_PRESETS),
+  }));
+  const boards = boardMigrations.map(({ normalized }) => normalized).filter(Boolean);
+  const storedLastSeenId = data.lastSeenId || {};
+  const lastSeenId = { ...storedLastSeenId };
+
+  boardMigrations.forEach(({ stored: storedBoard, normalized: normalizedBoard }) => {
+    if (!normalizedBoard || !storedBoard?.url || storedBoard.url === normalizedBoard.url) return;
+    if (!Object.prototype.hasOwnProperty.call(lastSeenId, storedBoard.url)) return;
+
+    const checkpoints = [lastSeenId[normalizedBoard.url], lastSeenId[storedBoard.url]]
+      .map(Number)
+      .filter(Number.isSafeInteger);
+    if (checkpoints.length > 0) {
+      lastSeenId[normalizedBoard.url] = Math.max(...checkpoints);
+    }
+    delete lastSeenId[storedBoard.url];
+  });
+
+  const updates = {};
+  if (JSON.stringify(storedBoards) !== JSON.stringify(boards)) updates.boards = boards;
+  if (JSON.stringify(storedLastSeenId) !== JSON.stringify(lastSeenId)) updates.lastSeenId = lastSeenId;
+  if (Object.keys(updates).length > 0) {
+    await chrome.storage.local.set(updates);
+  }
   return {
     credentials: data.credentials || null,
-    boards: data.boards || [],
+    boards,
     checkIntervalMinutes: data.checkIntervalMinutes || 60,
   };
 }
@@ -244,33 +287,59 @@ async function withRetry(fn, retries = 1, delayMs = 2000) {
   }
 }
 
-// tr_basic 행이 하나도 안 잡히면 사이트 구조 변경일 수도 있지만, 세션이 만료돼서
-// 로그인 페이지로 튕겨나간 것일 가능성이 더 크다. 한 번 재로그인 후 다시 시도한다.
+// 로그인 페이지로 돌아온 것이 확인된 경우에만 한 번 재로그인한다. 글이 실제로 없는
+// 게시판은 정상적인 빈 목록이므로 불필요한 로그인 요청을 만들지 않는다.
 async function fetchBoardPostsWithRetry(board, credentials) {
-  let posts = await fetchBoardPosts(board.url);
-
-  if (posts.length === 0) {
+  try {
+    return await fetchBoardPosts(board.url);
+  } catch (error) {
+    if (error.code !== "HISNET_SESSION_EXPIRED") {
+      throw error;
+    }
     console.warn(
-      `[HISNet ext] ${board.name}: 글을 하나도 찾지 못함 - 세션 만료 의심, 재로그인 후 재시도`
+      `[HISNet ext] ${board.name}: 로그인 페이지로 이동됨 - 재로그인 후 재시도`
     );
     const loginResult = await loginToHisnet(credentials.id, credentials.password);
     if (!loginResult.success) {
       throw new Error(`재로그인 실패: ${loginResult.message}`);
     }
-    posts = await fetchBoardPosts(board.url);
+    return fetchBoardPosts(board.url);
   }
+}
 
+// ===== 공지 보관함 + 읽지 않은 개수 배지 =====
+// 저장 키는 이전 버전과의 호환을 위해 unreadPosts를 유지하지만, 이제 읽음/즐겨찾기
+// 상태까지 함께 보관한다. 배지는 목록 길이가 아니라 읽지 않은 공지만 센다.
+let noticeOperationQueue = Promise.resolve();
+
+function queueNoticeOperation(operation) {
+  const result = noticeOperationQueue.then(operation, operation);
+  noticeOperationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function readNoticePostsUnsafe() {
+  const data = await chrome.storage.local.get(["unreadPosts", "boards"]);
+  const boards = (data.boards || DEFAULT_BOARDS)
+    .map((board) => normalizeBoard(board, BOARD_PRESETS))
+    .filter(Boolean);
+  const stored = data.unreadPosts || [];
+  const normalized = stored.map((post) => normalizeNotice(post, boards));
+
+  if (JSON.stringify(stored) !== JSON.stringify(normalized)) {
+    await chrome.storage.local.set({ unreadPosts: normalized });
+  }
+  return normalized;
+}
+
+async function setNoticePostsUnsafe(posts) {
+  await chrome.storage.local.set({ unreadPosts: posts });
+  await updateBadge(countUnread(posts));
   return posts;
 }
 
-// ===== 안 읽은 새 글 개수 배지 =====
-// 알림을 놓쳐도 툴바 아이콘에 숫자가 남아있게 하고, 팝업을 열면(=확인함) 지운다.
-
-// unreadPosts: [{ boardName, title, url }, ...] - 팝업에서 목록으로 보여줄 항목 그대로 저장.
-// 배지 숫자는 이 배열의 길이다.
-async function getUnreadPosts() {
-  const data = await chrome.storage.local.get("unreadPosts");
-  return data.unreadPosts || [];
+function getNoticePosts() {
+  return queueNoticeOperation(() => readNoticePostsUnsafe());
 }
 
 async function updateBadge(count) {
@@ -282,19 +351,38 @@ async function updateBadge(count) {
   }
 }
 
-async function addUnreadPosts(entries) {
-  const next = (await getUnreadPosts()).concat(entries);
-  await chrome.storage.local.set({ unreadPosts: next });
-  await updateBadge(next.length);
+function addNoticePosts(entries) {
+  return queueNoticeOperation(async () =>
+    setNoticePostsUnsafe(mergeNotices(await readNoticePostsUnsafe(), entries))
+  );
 }
 
-async function clearUnreadPosts() {
-  await chrome.storage.local.set({ unreadPosts: [] });
-  await updateBadge(0);
+function markStoredNoticeRead(url) {
+  return queueNoticeOperation(async () =>
+    setNoticePostsUnsafe(markNoticeRead(await readNoticePostsUnsafe(), url))
+  );
+}
+
+function toggleStoredNoticeFavorite(url) {
+  return queueNoticeOperation(async () =>
+    setNoticePostsUnsafe(toggleNoticeFavorite(await readNoticePostsUnsafe(), url))
+  );
+}
+
+function deleteStoredNotice(url) {
+  return queueNoticeOperation(async () =>
+    setNoticePostsUnsafe(deleteNotice(await readNoticePostsUnsafe(), url))
+  );
+}
+
+function clearStoredReadNotices() {
+  return queueNoticeOperation(async () =>
+    setNoticePostsUnsafe(clearReadNotices(await readNoticePostsUnsafe()))
+  );
 }
 
 // 서비스 워커가 (재시작 등으로) 새로 뜰 때마다 저장된 값 기준으로 배지를 다시 그린다.
-getUnreadPosts().then((posts) => updateBadge(posts.length));
+getNoticePosts().then((posts) => updateBadge(countUnread(posts)));
 
 // ===== 전체 흐름을 묶는 실행 함수 =====
 
@@ -346,20 +434,30 @@ async function runCheck() {
     let totalNew = 0;
     const boardErrors = [];
     const collectedNewPosts = [];
+    const knownNoticeUrls = new Set((await getNoticePosts()).map((post) => post.url));
 
     for (const board of boards) {
       try {
         const posts = await withRetry(() => fetchBoardPostsWithRetry(board, credentials), 1);
         const newPosts = await compareAndGetNewPosts(board.url, posts);
-        await notifyNewPosts(board.name, board.url, newPosts);
-        totalNew += newPosts.length;
+        const notificationPosts = newPosts.filter(
+          (post) => !knownNoticeUrls.has(buildReadUrl(board.url, post.id))
+        );
+        await notifyNewPosts(board.name, board.url, notificationPosts);
+        totalNew += notificationPosts.length;
 
         for (const post of newPosts) {
+          const url = buildReadUrl(board.url, post.id);
           collectedNewPosts.push({
             boardName: board.name,
+            category: board.category || "기타",
             title: post.title,
-            url: buildReadUrl(board.url, post.id),
+            date: post.date,
+            url,
+            read: false,
+            favorite: false,
           });
+          knownNoticeUrls.add(url);
         }
       } catch (err) {
         console.error(`[HISNet ext] ${board.name} 확인 중 오류:`, err);
@@ -373,7 +471,7 @@ async function runCheck() {
         : `일부 게시판 확인 실패: ${boardErrors.join(", ")}`;
 
     if (collectedNewPosts.length > 0) {
-      await addUnreadPosts(collectedNewPosts);
+      await addNoticePosts(collectedNewPosts);
     }
 
     await recordCheckStatus(boardErrors.length === 0, summary);
@@ -387,25 +485,58 @@ async function runCheck() {
 // 컨텍스트라, chrome.runtime.sendMessage로 요청을 보내고 여기서 처리한다.
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  const respond = (operation) => {
+    Promise.resolve()
+      .then(operation)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ ok: false, message: error.message }));
+    return true;
+  };
+
   if (message?.type === "RUN_CHECK_NOW") {
-    runCheck().then(() => sendResponse({ ok: true }));
-    return true; // 비동기로 sendResponse를 호출하겠다는 표시 (필수)
+    return respond(async () => {
+      await runCheck();
+      return { ok: true };
+    });
   }
 
   if (message?.type === "TEST_LOGIN") {
-    loginToHisnet(message.id, message.password)
-      .then((result) => sendResponse(result))
-      .catch((err) => sendResponse({ success: false, message: err.message }));
-    return true;
+    return respond(async () => loginToHisnet(message.id, message.password));
   }
 
-  if (message?.type === "CONSUME_UNREAD_POSTS") {
-    // 팝업이 목록을 읽어가는 것 = "확인함"으로 간주하고 한 번에 반환+비우기를 한다
-    // (따로 읽기/지우기를 하면 그 사이에 새 확인이 끼어드는 경쟁 상태가 생길 수 있다).
-    getUnreadPosts().then((posts) => {
-      clearUnreadPosts().then(() => sendResponse({ posts }));
+  if (message?.type === "GET_NOTICE_POSTS" || message?.type === "GET_UNREAD_POSTS") {
+    return respond(async () => {
+      const posts = await getNoticePosts();
+      return { ok: true, posts, unreadCount: countUnread(posts) };
     });
-    return true;
+  }
+
+  if (message?.type === "MARK_NOTICE_READ") {
+    return respond(async () => {
+      const posts = await markStoredNoticeRead(message.url);
+      return { ok: true, posts, unreadCount: countUnread(posts) };
+    });
+  }
+
+  if (message?.type === "TOGGLE_NOTICE_FAVORITE") {
+    return respond(async () => {
+      const posts = await toggleStoredNoticeFavorite(message.url);
+      return { ok: true, posts, unreadCount: countUnread(posts) };
+    });
+  }
+
+  if (message?.type === "DELETE_NOTICE") {
+    return respond(async () => {
+      const posts = await deleteStoredNotice(message.url);
+      return { ok: true, posts, unreadCount: countUnread(posts) };
+    });
+  }
+
+  if (message?.type === "CLEAR_READ_NOTICES") {
+    return respond(async () => {
+      const posts = await clearStoredReadNotices();
+      return { ok: true, posts, unreadCount: countUnread(posts) };
+    });
   }
 });
 
@@ -423,9 +554,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 const DEFAULT_BOARDS = [
-  { name: "일반공지", url: "https://hisnet.handong.edu/myboard/list.php?Board=NB0001" },
-  { name: "장학공지", url: "https://hisnet.handong.edu/myboard/list.php?Board=JANG_NOTICE" },
-  { name: "대학원공지", url: "https://hisnet.handong.edu/myboard/list.php?Board=B0113" },
+  { category: "일반", name: "일반공지", url: "https://hisnet.handong.edu/myboard/list.php?Board=NB0001" },
+  { category: "장학공지", name: "장학공지", url: "https://hisnet.handong.edu/myboard/list.php?Board=JANG_NOTICE" },
+  { category: "대학원공지", name: "대학원공지", url: "https://hisnet.handong.edu/myboard/list.php?Board=B0113" },
 ];
 
 chrome.runtime.onInstalled.addListener(async () => {

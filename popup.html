@@ -62,6 +62,29 @@
     .subtitle.fail {
       color: #b00020;
     }
+    .filters {
+      display: flex;
+      gap: 5px;
+      margin: 0 -2px 10px;
+      padding: 2px;
+      overflow-x: auto;
+      scrollbar-width: thin;
+    }
+    .filter-btn {
+      flex: 0 0 auto;
+      padding: 4px 8px;
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      color: #666;
+      background: #fff;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .filter-btn.active {
+      border-color: #0173bc;
+      color: #fff;
+      background: #0173bc;
+    }
     #newPostsList {
       list-style: none;
       padding: 0;
@@ -84,6 +107,9 @@
       background: #0173bc;
       flex-shrink: 0;
     }
+    #newPostsList li.read .unread-bar {
+      background: #d7dce1;
+    }
     #newPostsList a {
       display: block;
       font-size: 13px;
@@ -94,17 +120,96 @@
     #newPostsList a:hover {
       text-decoration: underline;
     }
-    .board-tag {
+    .post-content {
+      flex: 1;
+      min-width: 0;
+    }
+    .post-meta {
       display: block;
       font-size: 11px;
       color: #0173bc;
       margin-bottom: 2px;
+    }
+    #newPostsList li.read a {
+      color: #888;
+    }
+    .read-label {
+      margin-left: 5px;
+      color: #999;
+      font-size: 10px;
+    }
+    .post-actions {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .favorite-btn,
+    .delete-btn {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      flex-shrink: 0;
+      border: none;
+      border-radius: 4px;
+      background: none;
+      color: #999;
+      cursor: pointer;
+    }
+    .favorite-btn {
+      font-size: 17px;
+    }
+    .favorite-btn:hover {
+      background: #f0f0f0;
+    }
+    .favorite-btn.active {
+      color: #e5a000;
+    }
+    .delete-btn {
+      font-family: "Segoe UI Symbol", sans-serif;
+      font-size: 15px;
+      line-height: 1;
+    }
+    .delete-btn:hover {
+      color: #d94b4b;
+      background: #fff1f1;
     }
     .empty-state {
       font-size: 12px;
       color: #888;
       text-align: center;
       padding: 20px 0;
+    }
+    .list-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .list-header span {
+      font-size: 12px;
+      color: #666;
+    }
+    .clear-all-btn {
+      border: none;
+      background: none;
+      color: #0173bc;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 0;
+    }
+    .clear-all-btn:hover {
+      text-decoration: underline;
+    }
+    .action-status {
+      min-height: 14px;
+      margin: 7px 0 0;
+      color: #0173bc;
+      font-size: 11px;
+    }
+    .action-status.fail {
+      color: #b00020;
     }
     .footer {
       display: flex;
@@ -135,14 +240,23 @@
   </div>
   <p class="subtitle" id="subtitle">불러오는 중...</p>
 
+  <div class="filters" id="filterList" role="tablist" aria-label="공지 분류" hidden></div>
+
+  <div class="list-header" id="listHeader" hidden>
+    <span id="noticeCountLabel"></span>
+    <button class="clear-all-btn" id="clearReadBtn">읽은 공지 지우기</button>
+  </div>
   <ul id="newPostsList" hidden></ul>
   <p class="empty-state" id="emptyState" hidden>새 글이 없습니다.</p>
+  <p class="action-status" id="actionStatus" aria-live="polite"></p>
 
   <div class="footer">
     <span id="boardCount"></span>
     <a href="#" id="openOptionsLink">⚙ 설정</a>
   </div>
 
+  <script src="core.js"></script>
+  <script src="ui-actions.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

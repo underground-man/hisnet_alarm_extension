@@ -122,6 +122,35 @@
       flex: 1;
       margin-bottom: 0;
     }
+    select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 7px 8px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 13px;
+    }
+    .preset-add-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .preset-add-row select {
+      flex: 1;
+    }
+    .link-btn {
+      border: none;
+      background: none;
+      color: #0173bc;
+      font-size: 12px;
+      padding: 0;
+      margin-bottom: 8px;
+    }
+    .link-btn:hover {
+      text-decoration: underline;
+      background: none;
+    }
     #saveBtn {
       width: 100%;
       padding: 10px;
@@ -196,7 +225,13 @@
   <div class="card">
     <h2>📋 게시판 목록</h2>
     <ul id="boardList"></ul>
-    <div class="board-add-row">
+
+    <div class="preset-add-row">
+      <select id="presetBoardSelect"></select>
+      <button id="addPresetBtn">추가</button>
+    </div>
+    <button type="button" class="link-btn" id="toggleCustomBtn">직접 URL로 추가하기</button>
+    <div class="board-add-row" id="customAddRow" hidden>
       <input type="text" id="newBoardName" placeholder="게시판 이름" />
       <input type="text" id="newBoardUrl" placeholder="게시판 URL" />
       <button id="addBoardBtn">추가</button>
@@ -206,6 +241,7 @@
   <button id="saveBtn">저장</button>
   <p id="statusMsg"></p>
 
+  <script src="core.js"></script>
   <script src="options.js"></script>
 </body>
 </html>
