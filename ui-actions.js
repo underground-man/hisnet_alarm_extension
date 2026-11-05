@@ -23,7 +23,11 @@
   }
 
   async function deleteNotice(url, sendMessage) {
-    return ensureSuccess(await sendMessage({ type: "DELETE_NOTICE", url }));
+    const response = await sendMessage({ type: "DELETE_NOTICE", url });
+    if (!response) {
+      throw new Error("확장 프로그램 업데이트가 적용되지 않았습니다. chrome://extensions에서 HISNet 알림봇을 새로고침한 뒤 다시 시도해주세요.");
+    }
+    return ensureSuccess(response);
   }
 
   async function clearRead(sendMessage) {

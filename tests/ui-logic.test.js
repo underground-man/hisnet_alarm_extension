@@ -60,6 +60,14 @@ test("delete action sends the notice URL", async () => {
   assert.deepEqual(messages, [{ type: "DELETE_NOTICE", url: "u1" }]);
 });
 
+test("delete action explains how to recover when an old background worker returns no response", async () => {
+  const { deleteNotice } = loadActions();
+  await assert.rejects(
+    () => deleteNotice("u1", async () => undefined),
+    /chrome:\/\/extensions.*새로고침/
+  );
+});
+
 test("custom board preparation rejects a normalized duplicate", () => {
   const existing = [{
     category: "일반",

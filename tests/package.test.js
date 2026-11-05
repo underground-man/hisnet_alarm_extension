@@ -6,9 +6,9 @@ const { spawnSync } = require("node:child_process");
 
 const root = path.join(__dirname, "..");
 
-test("release manifest and ZIP are version 0.4.1 and current", () => {
+test("release manifest and ZIP are version 0.4.2 and current", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
-  assert.equal(manifest.version, "0.4.1");
+  assert.equal(manifest.version, "0.4.2");
 
   const result = spawnSync(
     "powershell.exe",
